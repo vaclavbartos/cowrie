@@ -2,13 +2,13 @@
 # See the COPYRIGHT file for more information
 
 import os
-import shlex
 import re
 import copy
 
 from twisted.python import log
 
 from . import fs
+from . import shlex
 
 class HoneyPotCommand(object):
 
@@ -93,9 +93,9 @@ class HoneyPotShell(object):
             return
 
         line = self.cmdpending.pop(0)
+        cmdAndArgs = shlex.split(unicode(line))
         try:
-	    line = line.replace('>', ' > ').replace('|', ' | ').replace('<',' < ')
-            cmdAndArgs = shlex.split(line)
+            line = line.replace('>', ' > ').replace('|', ' | ').replace('<',' < ')
         except:
             self.protocol.writeln(
                 'bash: syntax error: unexpected end of file')
