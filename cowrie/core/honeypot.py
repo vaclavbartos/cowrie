@@ -58,17 +58,27 @@ class HoneyPotShell(object):
         self.envvars = {
             'PATH':     '/bin:/usr/bin:/sbin:/usr/sbin',
             }
+        #self.lexer.debug = 1
 
     def lineReceived(self, line):
         log.msg('CMD: %s' % (line,))
-        line = line[:500]
-        comment = re.compile('^\s*#')
-        for i in [x.strip() for x in re.split(';|&&|\n', line.strip())[:10]]:
-            if not len(i):
+        self.lexer = shlex.shlex(punctuation_chars=True);
+        self.lexer.push_source(line)
+        tokens = []
+        while True:
+            tok = self.lexer.get_token()
+            log.msg( "tok: %s" % (repr(tok)) )
+            # for now, execute all after &&
+            if tok == ';' or tok == self.lexer.eof or tok == '&&':
+                self.cmdpending.append((tokens))
+                tokens = []
+            if tok == ';':
                 continue
-            if comment.match(i):
+            if tok == '&&':
                 continue
-            self.cmdpending.append(i)
+            if tok == self.lexer.eof:
+                break
+            tokens.append(tok)
         if len(self.cmdpending):
             self.runCommand()
         else:
@@ -92,17 +102,16 @@ class HoneyPotShell(object):
                 self.protocol.terminal.transport.session.sendClose()
             return
 
-        line = self.cmdpending.pop(0)
-        cmdAndArgs = shlex.split(unicode(line))
-        try:
-            line = line.replace('>', ' > ').replace('|', ' | ').replace('<',' < ')
-        except:
-            self.protocol.writeln(
-                'bash: syntax error: unexpected end of file')
-            # could run runCommand here, but i'll just clear the list instead
-            self.cmdpending = []
-            self.showPrompt()
-            return
+        cmdAndArgs = self.cmdpending.pop()
+        line = ' '.join(cmdAndArgs)
+        #log.msg("runCommand line=%s" % line)
+
+        #    self.honeypot.writeln(
+        #        'bash: syntax error: unexpected end of file')
+        #    # could run runCommand here, but i'll just clear the list instead
+        #    self.cmdpending = []
+        #    self.showPrompt()
+        #    return
 
         # probably no reason to be this comprehensive for just PATH...
         envvars = copy.copy(self.envvars)
@@ -131,12 +140,10 @@ class HoneyPotShell(object):
         cmdclass = self.protocol.getCommand(cmd, envvars['PATH'].split(':'))
         if cmdclass:
             log.msg(eventid='KIPP0005', input=line, format='Command found: %(input)s')
-            #self.protocol.logDispatch('Command found: %s' % (line,))
-            self.protocol.call_command(cmdclass, *rargs)
+            self.honeypot.call_command(cmdclass, *rargs)
         else:
             log.msg(eventid='KIPP0006',
                 input=line, format='Command not found: %(input)s')
-            #self.protocol.logDispatch('Command not found: %s' % (line,))
             if len(line):
                 self.protocol.writeln('bash: %s: command not found' % (cmd,))
                 runOrPrompt()
