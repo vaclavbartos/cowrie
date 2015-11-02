@@ -58,7 +58,6 @@ class HoneyPotShell(object):
         self.envvars = {
             'PATH':     '/bin:/usr/bin:/sbin:/usr/sbin',
             }
-        #self.lexer.debug = 1
 
     def lineReceived(self, line):
         log.msg('CMD: %s' % (line,))
