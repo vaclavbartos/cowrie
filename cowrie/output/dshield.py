@@ -4,12 +4,11 @@ See https://isc.sans.edu/ssh.html
 
 """
 
-import dateutil.parser
 import time
 import base64
 import hmac
 import hashlib
-import requests
+#import requests
 import re
 
 from twisted.python import log
@@ -24,35 +23,32 @@ class Output(cowrie.core.output.Output):
         self.auth_key = cfg.get('output_dshield', 'auth_key')
         self.userid = cfg.get('output_dshield', 'userid')
         self.batch_size = int(cfg.get('output_dshield', 'batch_size'))
+        self.batch_size = 1
         cowrie.core.output.Output.__init__(self, cfg)
 
     def start(self):
-        self.batch = [] # this is used to store login attempts in batches
+        self.buf = []
 
     def stop(self):
         pass
 
     def write(self, entry):
         if entry["eventid"] == 'KIPP0002' or entry["eventid"] == 'KIPP0003':
-            date = dateutil.parser.parse(entry["timestamp"])
-            self.batch.append({
-                'date' : date.date().__str__(),
-                'time' : date.time().strftime("%H:%M:%S"),
-                'timezone' : time.strftime("%z"),
-                'source_ip' : entry['src_ip'],
-                'user' : entry['username'],
-                'password' : entry['password'],
-            })
 
-            if len(self.batch) >= self.batch_size:
-                batch_to_send = self.batch
+            edate, etime, _ = re.split( '[T\.]', entry["timestamp"] )
+            self.buf.append( '{0}\t{1}\t{2}\t{3}\t{4}\t{5}\n'.format(edate,
+                etime, '+0000', entry['src_ip'], entry['username'],
+                entry['password']))
+
+            if len(self.buf) >= self.batch_size:
+                batch_to_send = self.buf
                 self.submit_entries(batch_to_send)
-                self.batch = []
+                self.buf = []
 
     def transmission_error(self, batch):
         self.batch.extend(batch) 
-        if len(self.batch) > self.batch_size * 2:
-            self.batch = self.batch[-self.batch_size:]
+        if len(self.buf) > self.batch_size * 2:
+            self.buf = self.buf[-self.batch_size:]
 
     def submit_entries(self, batch):
         """
@@ -64,27 +60,25 @@ class Output(cowrie.core.output.Output):
         # deal with a full digest like exchange. Using a fixed nonce to mix up the limited
         # userid.
         _nonceb64 = 'ElWO1arph+Jifqme6eXD8Uj+QTAmijAWxX1msbJzXDM='
-
-        log_output = ''
-        for attempt in self.batch:
-            log_output += '{0}\t{1}\t{2}\t{3}\t{4}\t{5}\n'.format(attempt['date'],
-                attempt['time'], attempt['timezone'], attempt['source_ip'],
-                attempt['user'], attempt['password'])
-
         nonce = base64.b64decode(_nonceb64)
+        dshield_url = 'https://secure.dshield.org/api/file/sshlog'
+
+        log_output= '\n'.join(batch)
+
         digest = base64.b64encode(hmac.new('{0}{1}'.format(nonce, self.userid), 
             base64.b64decode(self.auth_key), hashlib.sha256).digest())
+
         auth_header = 'credentials={0} nonce={1} userid={2}'.format(digest, _nonceb64, self.userid)
         headers = {'X-ISC-Authorization': auth_header,
                   'Content-Type':'text/plain',
                   'Content-Length': len(log_output)}
         log.msg(headers)
         req = threads.deferToThread(requests.request,
-                                method ='PUT',
-                                url = 'https://secure.dshield.org/api/file/sshlog',
-                                headers = headers,
-                                timeout = 10,
-                                data = log_output)
+            method ='PUT',
+            url = dshield_url,
+            headers = headers,
+            timeout = 10,
+            data = log_output)
 
         def check_response(resp):
             failed = False
