@@ -5,13 +5,15 @@ See https://isc.sans.edu/ssh.html
 """
 
 import base64
-import hmac
 import hashlib
-#import requests
+import hmac
 import re
 
+from twisted.internet import reactor
+from twisted.internet import ssl
+from twisted.internet import threads
 from twisted.python import log
-from twisted.internet import threads, reactor
+from twisted.web import client
 
 import cowrie.core.output
 
@@ -45,7 +47,7 @@ class Output(cowrie.core.output.Output):
                 self.buf = []
 
     def transmission_error(self, batch):
-        self.batch.extend(batch) 
+        self.buf.extend(batch)
         if len(self.buf) > self.batch_size * 2:
             self.buf = self.buf[-self.batch_size:]
 
@@ -58,13 +60,13 @@ class Output(cowrie.core.output.Output):
         # trying to avoid sending the authentication key in the "clear" but not wanting to
         # deal with a full digest like exchange. Using a fixed nonce to mix up the limited
         # userid.
-        _nonceb64 = 'ElWO1arph+Jifqme6eXD8Uj+QTAmijAWxX1msbJzXDM='
+        _nonceb64 = b'ElWO1arph+Jifqme6eXD8Uj+QTAmijAWxX1msbJzXDM='
         nonce = base64.b64decode(_nonceb64)
-        dshield_url = 'https://secure.dshield.org/api/file/sshlog'
+        dshield_url = b'https://secure.dshield.org/api/file/sshlog'
 
         log_output= '\n'.join(batch) + '\n'
 
-        digest = base64.b64encode(hmac.new('{0}{1}'.format(nonce, self.userid), 
+        digest = base64.b64encode(hmac.new('{0}{1}'.format(nonce, self.userid),
             base64.b64decode(self.auth_key), hashlib.sha256).digest())
 
         auth_header = 'credentials={0} nonce={1} userid={2}'.format(digest, _nonceb64, self.userid)
@@ -75,6 +77,14 @@ class Output(cowrie.core.output.Output):
         log.msg("Submitting {0} messages to SANS ISC DShield".format(len(batch)))
         log.msg(headers)
         log.msg(log_output)
+
+        # do this the Twisted way
+        factory = client.HTTPClientFactory(dshield_url, method=b'PUT',
+            postdata=log_output, headers=headers, timeout=10)
+        contextFactory = ssl.ClientContextFactory()
+        contextFactory.method = SSL.SSLv23_METHOD
+        reactor.connectSSL(host, port, factory, contextFactory)
+        return factory.deferred
 
         req = threads.deferToThread(requests.request,
             method ='PUT',
