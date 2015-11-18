@@ -4,7 +4,6 @@ See https://isc.sans.edu/ssh.html
 
 """
 
-import time
 import base64
 import hmac
 import hashlib
@@ -36,7 +35,7 @@ class Output(cowrie.core.output.Output):
         if entry["eventid"] == 'KIPP0002' or entry["eventid"] == 'KIPP0003':
 
             edate, etime, _ = re.split( '[T\.]', entry["timestamp"] )
-            self.buf.append( '{0}\t{1}\t{2}\t{3}\t{4}\t{5}\n'.format(edate,
+            self.buf.append( '{0}\t{1}\t{2}\t{3}\t{4}\t{5}'.format(edate,
                 etime, '+0000', entry['src_ip'], entry['username'],
                 entry['password']))
 
@@ -63,7 +62,7 @@ class Output(cowrie.core.output.Output):
         nonce = base64.b64decode(_nonceb64)
         dshield_url = 'https://secure.dshield.org/api/file/sshlog'
 
-        log_output= '\n'.join(batch)
+        log_output= '\n'.join(batch) + '\n'
 
         digest = base64.b64encode(hmac.new('{0}{1}'.format(nonce, self.userid), 
             base64.b64decode(self.auth_key), hashlib.sha256).digest())
@@ -72,7 +71,11 @@ class Output(cowrie.core.output.Output):
         headers = {'X-ISC-Authorization': auth_header,
                   'Content-Type':'text/plain',
                   'Content-Length': len(log_output)}
+
+        log.msg("Submitting {0} messages to SANS ISC DShield".format(len(batch)))
         log.msg(headers)
+        log.msg(log_output)
+
         req = threads.deferToThread(requests.request,
             method ='PUT',
             url = dshield_url,
