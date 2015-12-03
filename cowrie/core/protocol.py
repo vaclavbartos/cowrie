@@ -9,7 +9,6 @@ import os
 import time
 import socket
 import hashlib
-import copy
 
 from twisted.conch import recvline
 from twisted.conch.insults import insults
@@ -26,6 +25,7 @@ class HoneyPotBaseProtocol(insults.TerminalProtocol, TimeoutMixin):
 
     def __init__(self, avatar):
         self.user = avatar
+        self.environ = avatar.environ
         self.cfg = self.user.cfg
         self.hostname = avatar.server.hostname
         self.fs = avatar.server.fs
@@ -65,9 +65,9 @@ class HoneyPotBaseProtocol(insults.TerminalProtocol, TimeoutMixin):
         self.setTimeout(1800)
 
         # Source IP of client in user visible reports (can be fake or real)
-        if self.cfg.has_option('honeypot', 'fake_addr'):
+        try:
             self.clientIP = self.cfg.get('honeypot', 'fake_addr')
-        else:
+        except:
             self.clientIP = self.realClientIP
 
         if self.cfg.has_option('honeypot', 'internet_facing_ip'):
@@ -296,6 +296,7 @@ class HoneyPotInteractiveProtocol(HoneyPotBaseProtocol, recvline.HistoricRecvLin
         self.lastlogExit()
         HoneyPotBaseProtocol.connectionLost(self, reason)
         recvline.HistoricRecvLine.connectionLost(self, reason)
+        self.keyHandlers = None
 
 
     def initializeScreen(self):
@@ -363,7 +364,7 @@ class HoneyPotInteractiveProtocol(HoneyPotBaseProtocol, recvline.HistoricRecvLin
     def handle_CTRL_U(self):
         """
         """
-        for i in range(self.lineBufferIndex):
+        for _ in range(self.lineBufferIndex):
             self.terminal.cursorBackward()
             self.terminal.deleteCharacter()
         self.lineBuffer = self.lineBuffer[self.lineBufferIndex:]
@@ -379,6 +380,13 @@ class LoggingServerProtocol(insults.ServerProtocol):
     def __init__(self, prot=None, *a, **kw):
         insults.ServerProtocol.__init__(self, prot, *a, **kw)
         self.cfg = a[0].cfg
+        self.bytesReceived = 0
+
+        try:
+            self.bytesReceivedLimit = int(self.cfg.get('honeypot', 'download_limit_size'))
+        except:
+            self.bytesReceivedLimit = 0
+
         if prot is HoneyPotExecProtocol:
             self.type = 'e' # execcmd
         else:
@@ -389,11 +397,11 @@ class LoggingServerProtocol(insults.ServerProtocol):
         """
         """
         transport = self.transport.session.conn.transport
-        channel_id = self.transport.session.id
+        channelId = self.transport.session.id
 
         transport.ttylog_file = '%s/tty/%s-%s-%s%s.log' % \
             (self.cfg.get('honeypot', 'log_path'),
-            time.strftime('%Y%m%d-%H%M%S'), transport.transportId, channel_id,
+            time.strftime('%Y%m%d-%H%M%S'), transport.transportId, channelId,
             self.type)
 
         self.ttylog_file = transport.ttylog_file
@@ -405,7 +413,7 @@ class LoggingServerProtocol(insults.ServerProtocol):
 
         self.stdinlog_file = '%s/%s-%s-%s-stdin.log' % \
             (self.cfg.get('honeypot', 'download_path'),
-            time.strftime('%Y%m%d-%H%M%S'), transport.transportId, channel_id)
+            time.strftime('%Y%m%d-%H%M%S'), transport.transportId, channelId)
         self.stdinlog_open = False
 
         insults.ServerProtocol.connectionMade(self)
@@ -427,6 +435,13 @@ class LoggingServerProtocol(insults.ServerProtocol):
     def dataReceived(self, data):
         """
         """
+        self.bytesReceived += len(data)
+        if self.bytesReceivedLimit and self.bytesReceived > self.bytesReceivedLimit:
+            log.msg(eventid='KIPP0015', format='Data upload limit reached')
+            #self.loseConnection()
+            self.eofReceived()
+            return
+
         if self.stdinlog_open:
             with file(self.stdinlog_file, 'ab') as f:
                 f.write(data)
