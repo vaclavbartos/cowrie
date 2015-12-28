@@ -53,30 +53,43 @@ Options:
 ''').strip().split('\n')
 
 class command_sudo(HoneyPotCommand):
+    """
+    """
 
     def short_help(self):
+        """
+        """
         for ln in sudo_shorthelp:
-            self.writeln(ln)
+            self.write(ln+'\n')
         self.exit()
+
 
     def long_help(self):
+        """
+        """
         for ln in sudo_longhelp:
-            self.writeln(ln)
+            self.write(ln+'\n')
         self.exit()
 
+
     def version(self):
-        self.writeln(
+        """
+        """
+        self.write(
 '''Sudo version 1.8.5p2
 Sudoers policy plugin version 1.8.5p2
 Sudoers file grammar version 41
-Sudoers I/O plugin version 1.8.5p2''')
+Sudoers I/O plugin version 1.8.5p2\n''')
         self.exit()
 
+
     def start(self):
+        """
+        """
         try:
             optlist, args = getopt.getopt(self.args, 'shV')
         except getopt.GetoptError as err:
-            self.writeln('invalid option')
+            self.write('invalid option\n')
             self.short_help()
             return
 
@@ -92,14 +105,16 @@ Sudoers I/O plugin version 1.8.5p2''')
             line = ' '.join(args)
             cmd = args[0]
             args = args[1:]
-            cmdclass = self.protocol.getCommand(cmd, self.environ['PATH'].split(':'))
+            cmdclass = self.protocol.getCommand(cmd,
+                self.environ['PATH'].split(':'))
             if cmdclass:
-                log.msg(eventid='KIPP0005', input=line, format='Command found: %(input)s')
+                log.msg(eventid='COW0005', input=line,
+                    format='Command found: %(input)s')
                 self.protocol.call_command(cmdclass, *args)
                 self.exit()
             else:
-                self.short_help() 
+                self.short_help()
         else:
-            self.short_help() 
+            self.short_help()
 
 commands['sudo'] = command_sudo

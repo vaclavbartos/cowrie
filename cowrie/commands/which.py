@@ -21,8 +21,8 @@ class command_which(HoneyPotCommand):
                 resolved = self.fs.resolve_path(f, path)
 
                 if self.fs.exists(resolved):
-                    self.writeln("%s/%s" % (path, f))
+                    self.write("%s/%s\n" % (path, f))
                     continue
 
 # Definition
-commands['/bin/which'] = command_which
+commands['which'] = command_which

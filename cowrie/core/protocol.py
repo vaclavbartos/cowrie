@@ -10,10 +10,12 @@ import time
 import socket
 import hashlib
 
+from twisted.python import failure, log
+from twisted.internet import error
+from twisted.protocols.policies import TimeoutMixin
+
 from twisted.conch import recvline
 from twisted.conch.insults import insults
-from twisted.python import log
-from twisted.protocols.policies import TimeoutMixin
 
 from cowrie.core import honeypot
 from cowrie.core import ttylog
@@ -56,6 +58,8 @@ class HoneyPotBaseProtocol(insults.TerminalProtocol, TimeoutMixin):
     def connectionMade(self):
         """
         """
+
+
         transport = self.terminal.transport.session.conn.transport
 
         self.realClientIP = transport.transport.getPeer().host
@@ -85,10 +89,11 @@ class HoneyPotBaseProtocol(insults.TerminalProtocol, TimeoutMixin):
 
     def timeoutConnection(self):
         """
+	this logs out when connection times out
         """
-        self.writeln( 'timed out waiting for input: auto-logout' )
-        self.terminal.transport.session.sendEOF()
-        self.terminal.transport.session.sendClose()
+        self.write( 'timed out waiting for input: auto-logout\n' )
+        ret = failure.Failure(error.ProcessTerminated(exitCode=1))
+        self.terminal.transport.processEnded(ret)
 
 
     def eofReceived(self):
@@ -167,8 +172,7 @@ class HoneyPotBaseProtocol(insults.TerminalProtocol, TimeoutMixin):
         Sometimes still called after disconnect because of a deferred
         """
         if self.terminal:
-            self.terminal.write(data)
-            self.terminal.nextLine()
+            self.terminal.write(data+'\n')
 
 
     def call_command(self, cmd, *args):
@@ -252,25 +256,11 @@ class HoneyPotInteractiveProtocol(HoneyPotBaseProtocol, recvline.HistoricRecvLin
             })
 
 
-    def addInteractor(self, interactor):
-        """
-        """
-        transport = self.terminal.transport.session.conn.transport
-        transport.interactors.append(interactor)
-
-
-    def delInteractor(self, interactor):
-        """
-        """
-        transport = self.terminal.transport.session.conn.transport
-        transport.interactors.remove(interactor)
-
-
     def displayMOTD(self):
         """
         """
         try:
-            self.writeln(self.fs.file_contents('/etc/motd'))
+            self.write(self.fs.file_contents('/etc/motd')+'\n')
         except:
             pass
 
@@ -371,138 +361,3 @@ class HoneyPotInteractiveProtocol(HoneyPotBaseProtocol, recvline.HistoricRecvLin
         self.lineBuffer = self.lineBuffer[self.lineBufferIndex:]
         self.lineBufferIndex = 0
 
-
-
-class LoggingServerProtocol(insults.ServerProtocol):
-    """
-    Wrapper for ServerProtocol that implements TTY logging
-    """
-
-    def __init__(self, prot=None, *a, **kw):
-        insults.ServerProtocol.__init__(self, prot, *a, **kw)
-        self.cfg = a[0].cfg
-        self.bytesReceived = 0
-
-        try:
-            self.bytesReceivedLimit = int(self.cfg.get('honeypot', 'download_limit_size'))
-        except:
-            self.bytesReceivedLimit = 0
-
-        if prot is HoneyPotExecProtocol:
-            self.type = 'e' # execcmd
-        else:
-            self.type = 'i' # interactive
-
-
-    def connectionMade(self):
-        """
-        """
-        transport = self.transport.session.conn.transport
-        channelId = self.transport.session.id
-
-        transport.ttylog_file = '%s/tty/%s-%s-%s%s.log' % \
-            (self.cfg.get('honeypot', 'log_path'),
-            time.strftime('%Y%m%d-%H%M%S'), transport.transportId, channelId,
-            self.type)
-
-        self.ttylog_file = transport.ttylog_file
-        log.msg(eventid='KIPP0004', ttylog=transport.ttylog_file,
-            format='Opening TTY Log: %(ttylog)s')
-
-        ttylog.ttylog_open(transport.ttylog_file, time.time())
-        self.ttylog_open = True
-
-        self.stdinlog_file = '%s/%s-%s-%s-stdin.log' % \
-            (self.cfg.get('honeypot', 'download_path'),
-            time.strftime('%Y%m%d-%H%M%S'), transport.transportId, channelId)
-        self.stdinlog_open = False
-
-        insults.ServerProtocol.connectionMade(self)
-
-
-    def write(self, bytes):
-        """
-        """
-        transport = self.transport.session.conn.transport
-        for i in transport.interactors:
-            i.sessionWrite(bytes)
-        if self.ttylog_open:
-            ttylog.ttylog_write(transport.ttylog_file, len(bytes),
-                ttylog.TYPE_OUTPUT, time.time(), bytes)
-
-        insults.ServerProtocol.write(self, bytes)
-
-
-    def dataReceived(self, data):
-        """
-        """
-        self.bytesReceived += len(data)
-        if self.bytesReceivedLimit and self.bytesReceived > self.bytesReceivedLimit:
-            log.msg(eventid='KIPP0015', format='Data upload limit reached')
-            #self.loseConnection()
-            self.eofReceived()
-            return
-
-        if self.stdinlog_open:
-            with file(self.stdinlog_file, 'ab') as f:
-                f.write(data)
-        elif self.ttylog_open:
-            transport = self.transport.session.conn.transport
-            ttylog.ttylog_write(transport.ttylog_file, len(data),
-                ttylog.TYPE_INPUT, time.time(), data)
-
-        insults.ServerProtocol.dataReceived(self, data)
-
-
-    def eofReceived(self):
-        """
-        """
-        if self.terminalProtocol:
-            self.terminalProtocol.eofReceived()
-
-
-    def loseConnection(self):
-        """
-        override super to remove the terminal reset on logout
-
-        """
-        self.transport.loseConnection()
-
-
-    def connectionLost(self, reason):
-        """
-        FIXME: this method is called 4 times on logout....
-        it's called once from Avatar.closed() if disconnected
-        """
-        log.msg("received call to LSP.connectionLost")
-        transport = self.transport.session.conn.transport
-
-        if self.stdinlog_open:
-            try:
-                with open(self.stdinlog_file, 'rb') as f:
-                    shasum = hashlib.sha256(f.read()).hexdigest()
-                    shasumfile = self.cfg.get('honeypot',
-                        'download_path') + "/" + shasum
-                    if (os.path.exists(shasumfile)):
-                        os.remove(self.stdinlog_file)
-                    else:
-                        os.rename(self.stdinlog_file, shasumfile)
-                    os.symlink(shasum, self.stdinlog_file)
-                log.msg(eventid='KIPP0007',
-                    format='Saved stdin contents to %(outfile)s',
-                    url='stdin', outfile=shasumfile, shasum=shasum)
-            except IOError as e:
-                pass
-            finally:
-                self.stdinlog_open = False
-
-        if self.ttylog_open:
-            log.msg(eventid='KIPP0012', format='Closing TTY Log: %(ttylog)s',
-                ttylog=transport.ttylog_file)
-            ttylog.ttylog_close(transport.ttylog_file, time.time())
-            self.ttylog_open = False
-
-        self.cfg = None
-        insults.ServerProtocol.connectionLost(self, reason)
-
-# vim: set sw=4 et:

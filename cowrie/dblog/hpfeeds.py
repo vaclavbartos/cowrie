@@ -28,7 +28,7 @@ SIZES = {
 	OP_SUBSCRIBE: 5+256*2,
 }
 
-KIPPOCHAN = 'cowrie.sessions'
+COWRIECHAN = 'cowrie.sessions'
 
 class BadClient(Exception):
         pass
@@ -42,7 +42,7 @@ def strpack8(x):
 def strunpack8(x):
 	l = x[0]
 	return x[1:1+l], x[1+l:]
-	
+
 def msghdr(op, data):
 	return struct.pack('!iB', 5+len(data), op) + data
 def msgpublish(ident, chan, data):
@@ -221,7 +221,7 @@ class DBLogger(dblog.DBLogger):
 		self.meta[session]['endTime']=datetime.now().isoformat()
 		ttylog = self.ttylog(session)
 		if ttylog: meta['ttylog'] = ttylog.encode('hex')
-		self.client.publish(KIPPOCHAN, **meta)
+		self.client.publish(COWRIECHAN, **meta)
 
 	def handleLoginFailed(self, session, args):
 		u, p = args['username'], args['password']

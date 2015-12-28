@@ -33,7 +33,7 @@ class Output(cowrie.core.output.Output):
         pass
 
     def write(self, entry):
-        if entry["eventid"] == 'KIPP0002' or entry["eventid"] == 'KIPP0003':
+        if entry["eventid"] == 'COW0002' or entry["eventid"] == 'COW0003':
             date = dateutil.parser.parse(entry["timestamp"])
             self.batch.append({
                 'date' : date.date().__str__(),
@@ -50,7 +50,7 @@ class Output(cowrie.core.output.Output):
                 self.batch = []
 
     def transmission_error(self, batch):
-        self.batch.extend(batch) 
+        self.batch.extend(batch)
         if len(self.batch) > self.batch_size * 2:
             self.batch = self.batch[-self.batch_size:]
 
@@ -72,7 +72,7 @@ class Output(cowrie.core.output.Output):
                 attempt['user'], attempt['password'])
 
         nonce = base64.b64decode(_nonceb64)
-        digest = base64.b64encode(hmac.new('{0}{1}'.format(nonce, self.userid), 
+        digest = base64.b64encode(hmac.new('{0}{1}'.format(nonce, self.userid),
             base64.b64decode(self.auth_key), hashlib.sha256).digest())
         auth_header = 'credentials={0} nonce={1} userid={2}'.format(digest, _nonceb64, self.userid)
         headers = {'X-ISC-Authorization': auth_header,

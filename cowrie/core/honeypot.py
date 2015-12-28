@@ -8,9 +8,13 @@ This module contains ...
 import os
 import shlex
 import re
+import stat
 import copy
+import time
 
-from twisted.python import log
+from twisted.python import log, failure
+
+from twisted.internet import error
 
 from cowrie.core import fs
 
@@ -20,12 +24,43 @@ class HoneyPotCommand(object):
 
     def __init__(self, protocol, *args):
         self.protocol = protocol
-        self.args = args
+        self.args = list(args)
         self.environ = self.protocol.cmdstack[0].environ
-        self.writeln = self.protocol.writeln
-        self.write = self.protocol.terminal.write
-        self.nextLine = self.protocol.terminal.nextLine
         self.fs = self.protocol.fs
+
+        # MS-DOS style redirect handling, inside the command
+        if '>' in self.args:
+            self.writtenBytes = 0
+            self.writeln = self.writeToFileLn
+            self.write = self.writeToFile
+
+            index = self.args.index(">")
+            self.outfile = self.fs.resolve_path(str(self.args[(index + 1)]), self.protocol.cwd)
+            del self.args[index:]
+            self.safeoutfile = '%s/%s_%s' % (self.protocol.cfg.get('honeypot', 'download_path'),
+                time.strftime('%Y%m%d%H%M%S'), re.sub('[^A-Za-z0-9]', '_', "tmpecho"))
+            perm = stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH
+            self.fs.mkfile(self.outfile, 0, 0, 0, stat.S_IFREG | perm)
+            with open(self.safeoutfile, 'a'):
+                self.fs.update_realfile(self.fs.getfile(self.outfile), self.safeoutfile)
+        else:
+            self.write = self.protocol.terminal.write
+            self.writeln = self.protocol.writeln
+
+
+    def writeToFile(self, data):
+        """
+        """
+        with open(self.safeoutfile, 'a') as f:
+            f.write(data)
+        self.writtenBytes += len(data)
+        self.fs.update_size(self.outfile, self.writtenBytes)
+
+
+    def writeToFileLn(self, data):
+        """
+        """
+        self.writeToFile(data+'\n')
 
 
     def start(self):
@@ -38,21 +73,23 @@ class HoneyPotCommand(object):
     def call(self):
         """
         """
-        self.writeln('Hello World! [%s]' % (repr(self.args),))
+        self.write('Hello World! [%s]\n' % (repr(self.args),))
 
 
     def exit(self):
         """
+        Sometimes client is disconnected and command exits after. So cmdstack is gone
         """
-        self.protocol.cmdstack.pop()
-        self.protocol.cmdstack[-1].resume()
+        if self.protocol.cmdstack:
+            self.protocol.cmdstack.pop()
+            self.protocol.cmdstack[-1].resume()
 
 
     def handle_CTRL_C(self):
         """
         """
         log.msg('Received CTRL-C, exiting..')
-        self.writeln('^C')
+        self.write('^C\n')
         self.exit()
 
 
@@ -122,13 +159,15 @@ class HoneyPotShell(object):
             elif self.interactive:
                 self.showPrompt()
             else:
-                self.protocol.terminal.transport.session.loseConnection()
+                ret = failure.Failure(error.ProcessDone(status=""))
+                self.protocol.terminal.transport.processEnded(ret)
 
         if not len(self.cmdpending):
             if self.interactive:
                 self.showPrompt()
             else:
-                self.protocol.terminal.transport.session.loseConnection()
+                ret = failure.Failure(error.ProcessDone(status=""))
+                self.protocol.terminal.transport.processEnded(ret)
             return
 
         line = self.cmdpending.pop(0)
@@ -136,8 +175,8 @@ class HoneyPotShell(object):
             line = line.replace('>', ' > ').replace('|', ' | ').replace('<',' < ')
             cmdAndArgs = shlex.split(line)
         except:
-            self.protocol.writeln(
-                'bash: syntax error: unexpected end of file')
+            self.protocol.terminal.write(
+                'bash: syntax error: unexpected end of file\n')
             # Could run runCommand here, but i'll just clear the list instead
             self.cmdpending = []
             self.showPrompt()
@@ -169,13 +208,13 @@ class HoneyPotShell(object):
                 rargs.append(arg)
         cmdclass = self.protocol.getCommand(cmd, environ['PATH'].split(':'))
         if cmdclass:
-            log.msg(eventid='KIPP0005', input=line, format='Command found: %(input)s')
+            log.msg(eventid='COW0005', input=line, format='Command found: %(input)s')
             self.protocol.call_command(cmdclass, *rargs)
         else:
-            log.msg(eventid='KIPP0006',
+            log.msg(eventid='COW0006',
                 input=line, format='Command not found: %(input)s')
             if len(line):
-                self.protocol.writeln('bash: %s: command not found' % (cmd,))
+                self.protocol.terminal.write('bash: %s: command not found\n' % (cmd,))
                 runOrPrompt()
 
 
@@ -225,7 +264,7 @@ class HoneyPotShell(object):
         """
         self.protocol.lineBuffer = []
         self.protocol.lineBufferIndex = 0
-        self.protocol.terminal.nextLine()
+        self.protocol.terminal.write('\n')
         self.showPrompt()
 
 
@@ -293,17 +332,17 @@ class HoneyPotShell(object):
             first = l.split(' ')[:-1]
             newbuf = ' '.join(first + ['%s%s' % (basedir, prefix)])
             if newbuf == ''.join(self.protocol.lineBuffer):
-                self.protocol.terminal.nextLine()
+                self.protocol.terminal.write('\n')
                 maxlen = max([len(x[fs.A_NAME]) for x in files]) + 1
                 perline = int(self.protocol.user.windowSize[1] / (maxlen + 1))
                 count = 0
                 for file in files:
                     if count == perline:
                         count = 0
-                        self.protocol.terminal.nextLine()
+                        self.protocol.terminal.write('\n')
                     self.protocol.terminal.write(file[fs.A_NAME].ljust(maxlen))
                     count += 1
-                self.protocol.terminal.nextLine()
+                self.protocol.terminal.write('\n')
                 self.showPrompt()
 
         self.protocol.lineBuffer = list(newbuf)
