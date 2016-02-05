@@ -35,6 +35,8 @@ T_LINK, \
 
 class TooManyLevels(Exception):
     """
+    62 ELOOP Too many levels of symbolic links.  A path name lookup involved more than 8 symbolic links.
+    raise OSError(errno.ELOOP, os.strerror(errno.ENOENT))
     """
     pass
 
@@ -215,7 +217,7 @@ class HoneyPotFilesystem(object):
         It follows links.
         It tries A_REALFILE first and then tries honeyfs directory
         """
-        if count > 10:
+        if count > 8:
             raise TooManyLevels
         path = self.resolve_path(target, os.path.dirname(target))
         if not path or not self.exists(path):
@@ -225,7 +227,7 @@ class HoneyPotFilesystem(object):
             raise IsADirectoryError
         elif f[A_TYPE] == T_LINK:
             return self.file_contents(f[A_TARGET], count + 1)
-        elif f[A_TYPE] == T_FILE and f[A_REALFILE]: 
+        elif f[A_TYPE] == T_FILE and f[A_REALFILE]:
             return file(f[A_REALFILE], 'rb').read()
         realfile = self.realfile(f, '%s/%s' % \
             (self.cfg.get('honeypot', 'contents_path'), path))
@@ -374,7 +376,6 @@ class HoneyPotFilesystem(object):
             return True
         if self.tempfiles[fd] is not None:
             shasum = hashlib.sha256(open(self.tempfiles[fd], 'rb').read()).hexdigest()
-            log.msg("SHA sum %s" % (shasum,))
             shasumfile = self.cfg.get('honeypot', 'download_path') + "/" + shasum
             if (os.path.exists(shasumfile)):
                 os.remove(self.tempfiles[fd])
@@ -382,6 +383,11 @@ class HoneyPotFilesystem(object):
                 os.rename(self.tempfiles[fd], shasumfile)
             os.symlink(shasum, self.tempfiles[fd])
             self.update_realfile(self.getfile(self.filenames[fd]), shasumfile)
+            log.msg(format='SFTP Uploaded file \"%(filename)s\" to %(outfile)s',
+                    eventid='cowrie.session.file_upload',
+                    filename=os.path.basename(self.filenames[fd]),
+                    outfile=shasumfile,
+                    shasum=shasum)
             del self.tempfiles[fd]
             del self.filenames[fd]
         return os.close(fd)
@@ -546,7 +552,7 @@ class HoneyPotFilesystem(object):
 
 
 
-class _statobj:
+class _statobj(object):
     """
     Transform a tuple into a stat object
     """

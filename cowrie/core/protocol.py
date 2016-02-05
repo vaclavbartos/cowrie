@@ -91,7 +91,7 @@ class HoneyPotBaseProtocol(insults.TerminalProtocol, TimeoutMixin):
         """
 	this logs out when connection times out
         """
-        self.write( 'timed out waiting for input: auto-logout\n' )
+        self.terminal.write( 'timed out waiting for input: auto-logout\n' )
         ret = failure.Failure(error.ProcessTerminated(exitCode=1))
         self.terminal.transport.processEnded(ret)
 
@@ -107,8 +107,6 @@ class HoneyPotBaseProtocol(insults.TerminalProtocol, TimeoutMixin):
 
     def connectionLost(self, reason):
         """
-        this is only called on explicit logout, not on disconnect
-        this indicates the closing of the channel/session, not the closing of the transport
         """
         self.setTimeout(None)
         insults.TerminalProtocol.connectionLost(self, reason)
@@ -150,12 +148,15 @@ class HoneyPotBaseProtocol(insults.TerminalProtocol, TimeoutMixin):
                 if self.fs.exists(i):
                     path = i
                     break
+
         txt = os.path.normpath('%s/%s' % \
             (self.cfg.get('honeypot', 'txtcmds_path'), path))
         if os.path.exists(txt) and os.path.isfile(txt):
             return self.txtcmd(txt)
+
         if path in self.commands:
             return self.commands[path]
+
         return None
 
 
@@ -165,14 +166,6 @@ class HoneyPotBaseProtocol(insults.TerminalProtocol, TimeoutMixin):
         self.resetTimeout()
         if len(self.cmdstack):
             self.cmdstack[-1].lineReceived(line)
-
-
-    def writeln(self, data):
-        """
-        Sometimes still called after disconnect because of a deferred
-        """
-        if self.terminal:
-            self.terminal.write(data+'\n')
 
 
     def call_command(self, cmd, *args):
@@ -250,6 +243,7 @@ class HoneyPotInteractiveProtocol(HoneyPotBaseProtocol, recvline.HistoricRecvLin
             '\x06':     self.handle_RIGHT,	# CTRL-F
             '\x09':     self.handle_TAB,
             '\x0B':     self.handle_CTRL_K,	# CTRL-K
+            '\x0C':     self.handle_CTRL_L,	# CTRL-L
             '\x0E':     self.handle_DOWN,	# CTRL-N
             '\x10':     self.handle_UP,		# CTRL-P
             '\x15':     self.handle_CTRL_U,	# CTRL-U
@@ -260,7 +254,7 @@ class HoneyPotInteractiveProtocol(HoneyPotBaseProtocol, recvline.HistoricRecvLin
         """
         """
         try:
-            self.write(self.fs.file_contents('/etc/motd')+'\n')
+            self.terminal.write(self.fs.file_contents('/etc/motd')+'\n')
         except:
             pass
 
@@ -281,9 +275,11 @@ class HoneyPotInteractiveProtocol(HoneyPotBaseProtocol, recvline.HistoricRecvLin
 
     def connectionLost(self, reason):
         """
-        this doesn't seem to be called upon disconnect, so please use
-        HoneyPotTransport.connectionLost instead
         """
+        transport = self.terminal.transport.session.conn.transport
+        if transport.transport.sessionno in transport.factory.sessions:
+            del transport.factory.sessions[transport.transport.sessionno]
+
         self.lastlogExit()
         HoneyPotBaseProtocol.connectionLost(self, reason)
         recvline.HistoricRecvLine.connectionLost(self, reason)
@@ -350,6 +346,16 @@ class HoneyPotInteractiveProtocol(HoneyPotBaseProtocol, recvline.HistoricRecvLin
         """
         self.terminal.eraseToLineEnd()
         self.lineBuffer = self.lineBuffer[0:self.lineBufferIndex]
+
+
+    def handle_CTRL_L(self):
+        """
+        Handle a 'form feed' byte - generally used to request a screen
+        refresh/redraw.
+        """
+        self.terminal.eraseDisplay()
+        self.terminal.cursorHome()
+        self.drawInputLine()
 
 
     def handle_CTRL_U(self):

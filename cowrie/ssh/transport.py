@@ -7,6 +7,7 @@ This module contains ...
 
 import time
 import uuid
+import zlib
 
 import twisted
 from twisted.conch.ssh import factory
@@ -105,9 +106,9 @@ class HoneyPotSSHFactory(factory.SSHFactory):
     def stopFactory(self):
         """
         """
+        factory.SSHFactory.stopFactory(self)
         for output in self.output_plugins:
             output.stop()
-        factory.SSHFactory.stopFactory(self)
 
 
     def buildProtocol(self, addr):
@@ -151,6 +152,7 @@ class HoneyPotSSHFactory(factory.SSHFactory):
             'aes192-cbc', 'aes256-cbc']
         t.supportedPublicKeys = ['ssh-rsa', 'ssh-dss']
         t.supportedMACs = ['hmac-md5', 'hmac-sha1']
+        t.supportedCompressions = ['zlib@openssh.com', 'zlib', 'none']
 
         t.factory = self
         return t
@@ -168,7 +170,7 @@ class HoneyPotTransport(transport.SSHServerTransport, TimeoutMixin):
         """
         self.transportId = uuid.uuid4().hex[:8]
 
-        log.msg(eventid='COW0001',
+        log.msg(eventid='cowrie.session.connect',
            format='New connection: %(src_ip)s:%(src_port)s (%(dst_ip)s:%(dst_port)s) [session: %(sessionno)s]',
            src_ip=self.transport.getPeer().host, src_port=self.transport.getPeer().port,
            dst_ip=self.transport.getHost().host, dst_port=self.transport.getHost().port,
@@ -236,7 +238,7 @@ class HoneyPotTransport(transport.SSHServerTransport, TimeoutMixin):
         strings, rest = k[:-1], k[-1]
         (kexAlgs, keyAlgs, encCS, encSC, macCS, macSC, compCS, compSC, langCS,
             langSC) = [s.split(',') for s in strings]
-        log.msg(eventid='COW0009', version=self.otherVersionString,
+        log.msg(eventid='cowrie.client.version', version=self.otherVersionString,
             kexAlgs=kexAlgs, keyAlgs=keyAlgs, encCS=encCS, macCS=macCS,
             compCS=compCS, format='Remote SSH version: %(version)s')
 
@@ -252,10 +254,21 @@ class HoneyPotTransport(transport.SSHServerTransport, TimeoutMixin):
 
     def setService(self, service):
         """
-        Remove login grace timeout
+        Remove login grace timeout, set zlib compression after auth
         """
+
+        # Remove authentication timeout
         if service.name == "ssh-connection":
             self.setTimeout(None)
+
+        # when auth is successful we enable compression
+        # this is called right after MSG_USERAUTH_SUCCESS
+        if service.name == "ssh-connection":
+            if self.outgoingCompressionType == 'zlib@openssh.com':
+                self.outgoingCompression = zlib.compressobj(6)
+            if self.incomingCompressionType == 'zlib@openssh.com':
+                self.incomingCompression = zlib.decompressobj()
+
         transport.SSHServerTransport.setService(self, service)
 
 
@@ -264,12 +277,10 @@ class HoneyPotTransport(transport.SSHServerTransport, TimeoutMixin):
         This seems to be the only reliable place of catching lost connection
         """
         self.setTimeout(None)
-        if self.transport.sessionno in self.factory.sessions:
-            del self.factory.sessions[self.transport.sessionno]
         transport.SSHServerTransport.connectionLost(self, reason)
         self.transport.connectionLost(reason)
         self.transport = None
-        log.msg(eventid='COW0011', format='Connection lost')
+        log.msg(eventid='cowrie.session.closed', format='Connection lost')
 
 
     def sendDisconnect(self, reason, desc):

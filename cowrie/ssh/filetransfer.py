@@ -16,9 +16,11 @@ from twisted.conch.ssh.filetransfer import FXF_READ, FXF_WRITE, FXF_APPEND, FXF_
 import twisted.conch.ls
 from twisted.python import log
 
+import cowrie.core.pwd as pwd
+
 
 @implementer(ISFTPFile)
-class CowrieSFTPFile:
+class CowrieSFTPFile(object):
     """
     """
 
@@ -84,7 +86,7 @@ class CowrieSFTPFile:
         """
         self.bytes_written += len(data)
         if self.bytesReceivedLimit and self.bytes_written > self.bytesReceivedLimit:
-            log.msg(eventid='COW0015', format='Data upload limit reached')
+            log.msg(eventid='cowrie.direct-tcpip.data', format='Data upload limit reached')
             raise filetransfer.SFTPError( filetransfer.FX_FAILURE, "Quota exceeded" )
         self.sftpserver.fs.lseek(self.fd, offset, os.SEEK_SET)
         self.sftpserver.fs.write(self.fd, data)
@@ -104,7 +106,7 @@ class CowrieSFTPFile:
 
 
 
-class CowrieSFTPDirectory:
+class CowrieSFTPDirectory(object):
     """
     """
     def __init__(self, server, directory):
@@ -128,7 +130,10 @@ class CowrieSFTPDirectory:
             raise StopIteration
         else:
             s = self.server.fs.lstat(os.path.join(self.dir, f))
-            longname = twisted.conch.ls.lsLine(f, s)
+            s2 = self.server.fs.lstat(os.path.join(self.dir, f))
+            s2.st_uid = pwd.Passwd(self.server.avatar.cfg).getpwuid(s.st_uid)["pw_name"]
+            s2.st_gid = pwd.Group(self.server.avatar.cfg).getgrgid(s.st_gid)["gr_name"]
+            longname = twisted.conch.ls.lsLine(f, s2)
             attrs = self.server._getAttrs(s)
             return (f, longname, attrs)
 
@@ -141,7 +146,7 @@ class CowrieSFTPDirectory:
 
 
 @implementer(ISFTPServer)
-class SFTPServerForCowrieUser:
+class SFTPServerForCowrieUser(object):
     """
     """
 
@@ -272,7 +277,7 @@ class SFTPServerForCowrieUser:
     def realPath(self, path):
         """
         """
-        log.msg("SFTP realPath: %s" % (path,))
+        #log.msg("SFTP realPath: %s" % (path,))
         return self.fs.realpath(self._absPath(path))
 
 

@@ -23,19 +23,23 @@ class LoggingServerProtocol(insults.ServerProtocol):
 
     def __init__(self, prot=None, *a, **kw):
         insults.ServerProtocol.__init__(self, prot, *a, **kw)
-        self.cfg = a[0].cfg
+        cfg = a[0].cfg
         self.bytesReceived = 0
         self.interactors = []
 
+        self.ttylogPath = cfg.get('honeypot', 'log_path')
+        self.downloadPath = cfg.get('honeypot', 'download_path')
+
         try:
-            self.bytesReceivedLimit = int(self.cfg.get('honeypot', 'download_limit_size'))
+            self.bytesReceivedLimit = int(cfg.get('honeypot',
+                'download_limit_size'))
         except:
             self.bytesReceivedLimit = 0
 
         if prot is protocol.HoneyPotExecProtocol:
-            self.type = 'e' # execcmd
+            self.type = 'e' # Execcmd
         else:
-            self.type = 'i' # interactive
+            self.type = 'i' # Interactive
 
 
     def connectionMade(self):
@@ -45,25 +49,28 @@ class LoggingServerProtocol(insults.ServerProtocol):
         channelId = self.transport.session.id
 
         self.ttylog_file = '%s/tty/%s-%s-%s%s.log' % \
-            (self.cfg.get('honeypot', 'log_path'),
+            (self.ttylogPath,
             time.strftime('%Y%m%d-%H%M%S'), transportId, channelId,
             self.type)
         ttylog.ttylog_open(self.ttylog_file, time.time())
         self.ttylog_open = True
 
-        log.msg(eventid='COW0004', ttylog=self.ttylog_file,
-            format='Opening TTY Log: %(ttylog)s')
+        log.msg(eventid='cowrie.log.open',
+                ttylog=self.ttylog_file,
+                format='Opening TTY Log: %(ttylog)s')
 
         self.stdinlog_file = '%s/%s-%s-%s-stdin.log' % \
-            (self.cfg.get('honeypot', 'download_path'),
+            (self.downloadPath,
             time.strftime('%Y%m%d-%H%M%S'), transportId, channelId)
         self.stdinlog_open = False
+        self.ttylogSize = 0
 
         insults.ServerProtocol.connectionMade(self)
 
 
     def write(self, bytes):
         """
+        Output sent back to user
         """
         for i in self.interactors:
             i.sessionWrite(bytes)
@@ -72,15 +79,20 @@ class LoggingServerProtocol(insults.ServerProtocol):
             ttylog.ttylog_write(self.ttylog_file, len(bytes),
                 ttylog.TYPE_OUTPUT, time.time(), bytes)
 
+            self.ttylogSize += len(bytes)
+
         insults.ServerProtocol.write(self, bytes)
 
 
     def dataReceived(self, data):
         """
+        Input received from user
         """
         self.bytesReceived += len(data)
-        if self.bytesReceivedLimit and self.bytesReceived > self.bytesReceivedLimit:
-            log.msg(eventid='COW0015', format='Data upload limit reached')
+        if self.bytesReceivedLimit \
+          and self.bytesReceived > self.bytesReceivedLimit:
+            log.msg(eventid='cowrie.direct-tcpip.data',
+                    format='Data upload limit reached')
             #self.loseConnection()
             self.eofReceived()
             return
@@ -97,6 +109,7 @@ class LoggingServerProtocol(insults.ServerProtocol):
 
     def eofReceived(self):
         """
+        Receive channel close and pass on to terminal
         """
         if self.terminalProtocol:
             self.terminalProtocol.eofReceived()
@@ -104,20 +117,21 @@ class LoggingServerProtocol(insults.ServerProtocol):
 
     def addInteractor(self, interactor):
         """
+        Add to list of interactors
         """
         self.interactors.append(interactor)
 
 
     def delInteractor(self, interactor):
         """
+        Remove from list of interactors
         """
         self.interactors.remove(interactor)
 
 
     def loseConnection(self):
         """
-        override super to remove the terminal reset on logout
-
+        Override super to remove the terminal reset on logout
         """
         self.transport.loseConnection()
 
@@ -138,27 +152,29 @@ class LoggingServerProtocol(insults.ServerProtocol):
             try:
                 with open(self.stdinlog_file, 'rb') as f:
                     shasum = hashlib.sha256(f.read()).hexdigest()
-                    shasumfile = self.cfg.get('honeypot',
-                        'download_path') + "/" + shasum
+                    shasumfile = self.downloadPath + "/" + shasum
                     if (os.path.exists(shasumfile)):
                         os.remove(self.stdinlog_file)
                     else:
                         os.rename(self.stdinlog_file, shasumfile)
                     os.symlink(shasum, self.stdinlog_file)
-                log.msg(eventid='COW0007',
-                    format='Saved stdin contents to %(outfile)s',
-                    url='stdin', outfile=shasumfile, shasum=shasum)
+                log.msg(eventid='cowrie.session.file_download',
+                        format='Saved stdin contents to %(outfile)s',
+                        url='stdin',
+                        outfile=shasumfile,
+                        shasum=shasum)
             except IOError as e:
                 pass
             finally:
                 self.stdinlog_open = False
 
         if self.ttylog_open:
-            log.msg(eventid='COW0012', format='Closing TTY Log: %(ttylog)s',
-                ttylog=self.ttylog_file)
+            log.msg(eventid='cowrie.log.closed',
+                    format='Closing TTY Log: %(ttylog)s',
+                    ttylog=self.ttylog_file,
+                    size=self.ttylogSize)
             ttylog.ttylog_close(self.ttylog_file, time.time())
             self.ttylog_open = False
 
-        self.cfg = None
         insults.ServerProtocol.connectionLost(self, reason)
 

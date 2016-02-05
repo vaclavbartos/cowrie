@@ -163,11 +163,17 @@ class command_wget(HoneyPotCommand):
             os.remove(self.safeoutfile)
             log.msg("Not storing duplicate content " + shasum)
 
-        self.protocol.logDispatch( format='Downloaded URL (%(url)s) with SHA-256 %(shasum)s to %(outfile)s',
-            eventid='COW0007', url=self.url, outfile=hash_path, shasum=shasum )
+        self.protocol.logDispatch(eventid='cowrie.session.file_download',
+            format='Downloaded URL (%(url)s) with SHA-256 %(shasum)s to %(outfile)s',
+            url=self.url,
+            outfile=hash_path,
+            shasum=shasum )
 
-        log.msg( format='Downloaded URL (%(url)s) with SHA-256 %(shasum)s to %(outfile)s',
-            eventid='COW0007', url=self.url, outfile=hash_path, shasum=shasum )
+        log.msg(eventid='cowrie.session.file_download',
+                format='Downloaded URL (%(url)s) with SHA-256 %(shasum)s to %(outfile)s',
+                url=self.url,
+                outfile=hash_path,
+                shasum=shasum)
 
         # link friendly name to hash
         os.symlink( shasum, self.safeoutfile )
@@ -189,6 +195,7 @@ class command_wget(HoneyPotCommand):
         #    time.strftime('%Y-%m-%d %T'))
         self.exit()
 commands['/usr/bin/wget'] = command_wget
+commands['/usr/bin/dget'] = command_wget
 
 # from http://code.activestate.com/recipes/525493/
 class HTTPProgressDownloader(client.HTTPDownloader):
